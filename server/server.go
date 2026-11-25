@@ -690,6 +690,7 @@ func (s *Server) chatAgentRef() *agent.ChatAgent {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	s.registerValidationRoutes(mux)
 	s.registerSideRoutes(mux)
 
 	// Auth routes — exempt from JWT check (handled in requireAuth)

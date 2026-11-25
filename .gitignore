@@ -27,7 +27,8 @@ web/public/demo-version.json
 *.swo
 
 # docs
-/docs/
+/docs/*
+!/docs/白盒验证接口说明.md
 
 # os
 .DS_Store

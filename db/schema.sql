@@ -1170,6 +1170,66 @@ CREATE INDEX IF NOT EXISTS idx_findings_status ON findings(status, created_at DE
 CREATE INDEX IF NOT EXISTS idx_findings_asset_ids ON findings USING GIN(asset_ids jsonb_path_ops);
 
 -- 手动复测属于独立会话；结论与原漏洞处置状态分开保存。
+CREATE TABLE IF NOT EXISTS validation_alerts (
+    id BIGSERIAL PRIMARY KEY,
+    source TEXT NOT NULL,
+    scan_id TEXT NOT NULL DEFAULT '',
+    external_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    severity TEXT NOT NULL DEFAULT 'unknown',
+    target_url TEXT NOT NULL DEFAULT '',
+    input JSONB NOT NULL,
+    input_hash TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(source, scan_id, external_id)
+);
+CREATE INDEX IF NOT EXISTS idx_validation_alerts_created ON validation_alerts(id DESC);
+CREATE TABLE IF NOT EXISTS validation_alert_reviews (
+    alert_id BIGINT PRIMARY KEY REFERENCES validation_alerts(id) ON DELETE CASCADE,
+    problem_code TEXT NOT NULL DEFAULT '',
+    problem_code_truncated BOOLEAN NOT NULL DEFAULT false,
+    poc_provided BOOLEAN NOT NULL DEFAULT false,
+    poc_sha256 TEXT NOT NULL DEFAULT '',
+    poc_text TEXT NOT NULL DEFAULT '',
+    poc_truncated BOOLEAN NOT NULL DEFAULT false
+);
+ALTER TABLE validation_alert_reviews ADD COLUMN IF NOT EXISTS poc_sha256 TEXT NOT NULL DEFAULT '';
+ALTER TABLE validation_alert_reviews
+    ADD COLUMN IF NOT EXISTS poc_text TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS poc_truncated BOOLEAN NOT NULL DEFAULT false;
+CREATE TABLE IF NOT EXISTS validation_runs (
+    id BIGSERIAL PRIMARY KEY,
+    alert_id BIGINT NOT NULL REFERENCES validation_alerts(id) ON DELETE CASCADE,
+    snapshot JSONB NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','running','completed','failed','stopped')),
+    verdict TEXT NOT NULL DEFAULT '' CHECK(verdict IN ('','confirmed','not_reproduced','blocked','not_applicable','false_positive','uncertain')),
+    summary TEXT NOT NULL DEFAULT '',
+    evidence TEXT NOT NULL DEFAULT '',
+    evidence_ids JSONB NOT NULL DEFAULT '[]',
+    error TEXT NOT NULL DEFAULT '',
+    request_count INT NOT NULL DEFAULT 0,
+    request_budget INT NOT NULL CHECK(request_budget BETWEEN 1 AND 20),
+    timeout_seconds INT NOT NULL CHECK(timeout_seconds BETWEEN 30 AND 600),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    started_at TIMESTAMPTZ,
+    finished_at TIMESTAMPTZ
+);
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'validation_runs'::regclass
+        AND conname = 'validation_runs_verdict_check'
+        AND strpos(pg_get_constraintdef(oid), 'false_positive') = 0
+    ) THEN
+        ALTER TABLE validation_runs DROP CONSTRAINT validation_runs_verdict_check;
+        ALTER TABLE validation_runs ADD CONSTRAINT validation_runs_verdict_check
+            CHECK (verdict IN ('','confirmed','not_reproduced','blocked','not_applicable','false_positive','uncertain'));
+    END IF;
+END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_validation_runs_active ON validation_runs(alert_id) WHERE status IN ('pending','running');
+CREATE INDEX IF NOT EXISTS idx_validation_runs_alert ON validation_runs(alert_id,id DESC);
 CREATE TABLE IF NOT EXISTS finding_retests (
     id BIGSERIAL PRIMARY KEY,
     finding_id BIGINT NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
